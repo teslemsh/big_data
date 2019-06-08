@@ -1,0 +1,345 @@
+1. Set up docker containers, our server nodes
+
+docker exec -it clickhousebbdd_ch-client_1 /usr/bin/clickhouse-client --host clickhousebbdd_ch-server-1_1
+docker exec -it clickhousebbdd_ch-client_1 /usr/bin/clickhouse-client --host clickhousebbdd_ch-server-2_1
+docker exec -it clickhousebbdd_ch-client_1 /usr/bin/clickhouse-client --host clickhousebbdd_ch-server-3_1
+
+2. Creating our custom table, remember that clickhouse has strict schema.
+CREATE TABLE ontime_local
+(
+    Year UInt16,
+    Quarter UInt8,
+    Month UInt8,
+    DayofMonth UInt8,
+    DayOfWeek UInt8,
+    FlightDate Date,
+    UniqueCarrier FixedString(7),
+    AirlineID Int32,
+    Carrier FixedString(2),
+    TailNum String,
+    FlightNum String,
+    OriginAirportID Int32,
+    OriginAirportSeqID Int32,
+    OriginCityMarketID Int32,
+    Origin FixedString(5),
+    OriginCityName String,
+    OriginState FixedString(2),
+    OriginStateFips String,
+    OriginStateName String,
+    OriginWac Int32,
+    DestAirportID Int32,
+    DestAirportSeqID Int32,
+    DestCityMarketID Int32,
+    Dest FixedString(5),
+    DestCityName String,
+    DestState FixedString(2),
+    DestStateFips String,
+    DestStateName String,
+    DestWac Int32,
+    CRSDepTime Int32,
+    DepTime Int32,
+    DepDelay Int32,
+    DepDelayMinutes Int32,
+    DepDel15 Int32,
+    DepartureDelayGroups String,
+    DepTimeBlk String,
+    TaxiOut Int32,
+    WheelsOff Int32,
+    WheelsOn Int32,
+    TaxiIn Int32,
+    CRSArrTime Int32,
+    ArrTime Int32,
+    ArrDelay Int32,
+    ArrDelayMinutes Int32,
+    ArrDel15 Int32,
+    ArrivalDelayGroups Int32,
+    ArrTimeBlk String,
+    Cancelled UInt8,
+    CancellationCode FixedString(1),
+    Diverted UInt8,
+    CRSElapsedTime Int32,
+    ActualElapsedTime Int32,
+    AirTime Int32,
+    Flights Int32,
+    Distance Int32,
+    DistanceGroup UInt8,
+    CarrierDelay Int32,
+    WeatherDelay Int32,
+    NASDelay Int32,
+    SecurityDelay Int32,
+    LateAircraftDelay Int32,
+    FirstDepTime String,
+    TotalAddGTime String,
+    LongestAddGTime String,
+    DivAirportLandings String,
+    DivReachedDest String,
+    DivActualElapsedTime String,
+    DivArrDelay String,
+    DivDistance String,
+    Div1Airport String,
+    Div1AirportID Int32,
+    Div1AirportSeqID Int32,
+    Div1WheelsOn String,
+    Div1TotalGTime String,
+    Div1LongestGTime String,
+    Div1WheelsOff String,
+    Div1TailNum String,
+    Div2Airport String,
+    Div2AirportID Int32,
+    Div2AirportSeqID Int32,
+    Div2WheelsOn String,
+    Div2TotalGTime String,
+    Div2LongestGTime String,
+    Div2WheelsOff String,
+    Div2TailNum String,
+    Div3Airport String,
+    Div3AirportID Int32,
+    Div3AirportSeqID Int32,
+    Div3WheelsOn String,
+    Div3TotalGTime String,
+    Div3LongestGTime String,
+    Div3WheelsOff String,
+    Div3TailNum String,
+    Div4Airport String,
+    Div4AirportID Int32,
+    Div4AirportSeqID Int32,
+    Div4WheelsOn String,
+    Div4TotalGTime String,
+    Div4LongestGTime String,
+    Div4WheelsOff String,
+    Div4TailNum String,
+    Div5Airport String,
+    Div5AirportID Int32,
+    Div5AirportSeqID Int32,
+    Div5WheelsOn String,
+    Div5TotalGTime String,
+    Div5LongestGTime String,
+    Div5WheelsOff String,
+    Div5TailNum String
+)
+ENGINE = MergeTree (FlightDate, (Year, FlightDate), 8192);
+
+3. Ingest process, inserting data on one server
+
+cat ontime.csv | docker exec -i clickhousebbdd_ch-client_1 /usr/bin/clickhouse-client --host clickhousebbdd_ch-server-1 --query="INSERT INTO ontime FORMAT CSV"
+
+
+##################################
+ 1. Getting our table size
+##################################
+
+SELECT table,
+    formatReadableSize(sum(bytes)) as size,
+    min(min_date) as min_date,
+    max(max_date) as max_date
+    FROM system.parts
+    WHERE active
+GROUP BY table
+
+##################################
+ 2.Creating all shards and their respective tables for replicas
+#####################################################################
+NODE- 1
+
+create database testcluster_shard_1;
+create database testcluster_shard_3;
+
+CREATE TABLE testcluster_shard_1.tc_shard AS ontime_schema
+Engine=ReplicatedMergeTree('/clickhouse/tables/tc_shard_1/events', 'replica_1',   FlightDate,     (Year, FlightDate),     8192 )
+CREATE TABLE testcluster_shard_3.tc_shard AS ontime_schema
+Engine=ReplicatedMergeTree('/clickhouse/tables/tc_shard_3/events', 'replica_2',   FlightDate,     (Year, FlightDate),     8192 )
+
+####################################################################
+NODE-2
+
+create database testcluster_shard_1;
+create database testcluster_shard_2;
+
+CREATE TABLE testcluster_shard_2.tc_shard as ontime_schema
+Engine=ReplicatedMergeTree('/clickhouse/tables/tc_shard_2/events', 'replica_1', FlightDate,     (Year, FlightDate),     8192);
+
+CREATE TABLE testcluster_shard_1.tc_shard as ontime_schema
+Engine=ReplicatedMergeTree('/clickhouse/tables/tc_shard_1/events', 'replica_2', FlightDate,     (Year, FlightDate),     8192);
+
+###################################################################
+NODE-3
+create database testcluster_shard_3
+create database testcluster_shard_2
+
+CREATE TABLE testcluster_shard_3.tc_shard as ontime_schema Engine=ReplicatedMergeTree('/clickhouse/tables/tc_shard_3/events', 'replica_1', FlightDate,     (Year, FlightDate),     8192)
+CREATE TABLE testcluster_shard_2.tc_shard as ontime_schema Engine=ReplicatedMergeTree('/clickhouse/tables/tc_shard_2/events', 'replica_2', FlightDate,     (Year, FlightDate),     8192)
+
+##################################
+4.Creating distributed table with the same shcema.
+##################################
+CREATE TABLE tc_distributed as ontime_schema ENGINE = Distributed( 'ontime_cluster', '', tc_shard, rand() )
+INSERT INTO tc_distributed SELECT * FROM ontime;
+
+
+##################################
+5. Some queries.
+##################################
+
+SELECT
+    OriginCityName,
+    DestCityName,
+    count(*) AS flights
+FROM ontime WHERE Year = 2015 GROUP BY OriginCityName, DestCityName ORDER BY flights DESC LIMIT 20
+
+20 rows in set. Elapsed: 20.958 sec. Processed 7.77 million rows, 359.05 MB (370.68 thousand rows/s., 17.13 MB/s.)
+
+SELECT
+    OriginCityName,
+    DestCityName,
+    count(*) AS flights
+FROM tc_distributed WHERE Year = 2015 GROUP BY OriginCityName, DestCityName ORDER BY flights DESC LIMIT 20
+
+20 rows in set. Elapsed: 15.000 sec. Processed 7.77 million rows, 701.45 MB (1.01 million rows/s., 46.76 MB/s.)
+
+┌─OriginCityName────┬─DestCityName──────┬─flights─┐
+│ San Francisco, CA │ Los Angeles, CA   │   15116 │
+│ Los Angeles, CA   │ San Francisco, CA │   14799 │
+│ New York, NY      │ Chicago, IL       │   14734 │
+│ Chicago, IL       │ New York, NY      │   14632 │
+│ New York, NY      │ Boston, MA        │   13201 │
+│ Boston, MA        │ New York, NY      │   13201 │
+│ New York, NY      │ Los Angeles, CA   │   13113 │
+│ Los Angeles, CA   │ New York, NY      │   13106 │
+│ Chicago, IL       │ Washington, DC    │   12509 │
+│ Washington, DC    │ Chicago, IL       │   12310 │
+│ Atlanta, GA       │ Chicago, IL       │   12213 │
+│ Chicago, IL       │ Atlanta, GA       │   12103 │
+│ Los Angeles, CA   │ Chicago, IL       │   11111 │
+│ Atlanta, GA       │ New York, NY      │   11004 │
+│ New York, NY      │ Atlanta, GA       │   10986 │
+│ Miami, FL         │ New York, NY      │   10790 │
+│ New York, NY      │ Miami, FL         │   10779 │
+│ Chicago, IL       │ Los Angeles, CA   │   10755 │
+│ Las Vegas, NV     │ Los Angeles, CA   │   10657 │
+│ Boston, MA        │ Washington, DC    │   10655 │
+└───────────────────┴───────────────────┴─────────┘
+
+
+####################################################################
+SELECT OriginCityName, count(*) AS flights
+FROM ontime GROUP BY OriginCityName ORDER BY flights DESC LIMIT 20
+
+20 rows in set. Elapsed: 2.300 sec. Processed 166.63 million rows, 3.70 GB (72.45 million rows/s., 1.61 GB/s.)
+
+SELECT OriginCityName, count(*) AS flights
+FROM tc_distributed GROUP BY OriginCityName ORDER BY flights DESC LIMIT 20
+
+20 rows in set. Elapsed: 1.533 sec. Processed 166.63 million rows, 3.70 GB (108.72 million rows/s., 2.41 GB/s.)
+
+
+┌─OriginCityName────────┬──flights─┐
+│ Chicago, IL           │ 10536203 │
+│ Atlanta, GA           │  8867847 │
+│ Dallas/Fort Worth, TX │  7601863 │
+│ Houston, TX           │  5714988 │
+│ Los Angeles, CA       │  5575119 │
+│ New York, NY          │  5082337 │
+│ Denver, CO            │  4936651 │
+│ Phoenix, AZ           │  4725255 │
+│ Washington, DC        │  4165389 │
+│ Detroit, MI           │  3888927 │
+│ San Francisco, CA     │  3825008 │
+│ Las Vegas, NV         │  3640747 │
+│ Minneapolis, MN       │  3591494 │
+│ Newark, NJ            │  3514459 │
+│ Charlotte, NC         │  3424397 │
+│ St. Louis, MO         │  3099567 │
+│ Boston, MA            │  3068295 │
+│ Salt Lake City, UT    │  2816579 │
+│ Orlando, FL           │  2800300 │
+│ Philadelphia, PA      │  2737644 │
+└───────────────────────┴──────────┘
+
+
+#####################################################################3
+SELECT
+    DayOfWeek,
+    count() AS c,
+    avg(DepDelay > 60) AS delays
+FROM ontime
+GROUP BY DayOfWeek
+ORDER BY DayOfWeek ASC
+
+7 rows in set. Elapsed: 1.033 sec. Processed 166.63 million rows, 833.14 MB (161.38 million rows/s., 806.89 MB/s.)
+
+SELECT
+    DayOfWeek,
+    count() AS c,
+    avg(DepDelay > 60) AS delays
+FROM tc_distributed
+GROUP BY DayOfWeek
+ORDER BY DayOfWeek ASC
+
+7 rows in set. Elapsed: 2.934 sec. Processed 166.63 million rows, 833.14 MB (56.78 million rows/s., 283.92 MB/s.)
+┌─DayOfWeek─┬────────c─┬───────────────delays─┐
+│         1 │ 24550719 │  0.04353514045759719 │
+│         2 │ 24300891 │  0.03792930884715297 │
+│         3 │ 24412495 │  0.04103820604981179 │
+│         4 │ 24496092 │  0.04775259661826874 │
+│         5 │ 24515390 │  0.05071871179695693 │
+│         6 │ 21156963 │ 0.034911201574630533 │
+│         7 │ 23195477 │  0.04289957046367272 │
+└───────────┴──────────┴──────────────────────┘
+
+
+#####################################################################
+
+6. Spark vs clickhouse
+####################################################################
+
+:)  select count(*) from wikistat;
+SELECT count(*)
+FROM wikistat
+┌─────count()─┐
+│ 26935251789 │
+└─────────────┘
+1 rows in set. Elapsed: 6.610 sec. Processed 26.88 billion rows, 53.77 GB (4.07 billion rows/s., 8.13 GB/s.)
+
+
+spark-sql> select count(*) from wikistat;
+26935251789
+Time taken: 7.369 seconds, Fetched 1 row(s)
+
+
+####################################################################
+
+:) select count(*), toMonth(date) as mon from wikistat
+where toYear(date)=2008 and toMonth(date) between 1 and 10 group by mon;
+SELECT
+    count(*),
+    toMonth(date) AS mon
+FROM wikistat
+WHERE (toYear(date) = 2008) AND ((toMonth(date) >= 1) AND (toMonth(date) <= 10))
+GROUP BY mon
+┌────count()─┬─mon─┐
+│ 2100162604 │   1 │
+│ 1969757069 │   2 │
+│ 2081371530 │   3 │
+│ 2156878512 │   4 │
+│ 2476890621 │   5 │
+│ 2526662896 │   6 │
+│ 2489723244 │   7 │
+│ 2480356358 │   8 │
+│ 2522746544 │   9 │
+│ 2614372352 │  10 │
+└────────────┴─────┘
+10 rows in set. Elapsed: 37.450 sec. Processed 23.37 billion rows, 46.74 GB (623.97 million rows/s., 1.25 GB/s.)
+
+
+spark-sql> select count(*), month(dt) as mon from wikistat where year(dt)=2008 and month(dt) between 1 and 10 group by month(dt) order by month(dt);
+2100162604      1
+1969757069      2
+2081371530      3
+2156878512      4
+2476890621      5
+2526662896      6
+2489723244      7
+2480356358      8
+2522746544      9
+2614372352      10
+Time taken: 792.552 seconds, Fetched 10 row(s)
