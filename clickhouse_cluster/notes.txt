@@ -329,17 +329,3 @@ GROUP BY mon
 │ 2614372352 │  10 │
 └────────────┴─────┘
 10 rows in set. Elapsed: 37.450 sec. Processed 23.37 billion rows, 46.74 GB (623.97 million rows/s., 1.25 GB/s.)
-
-
-spark-sql> select count(*), month(dt) as mon from wikistat where year(dt)=2008 and month(dt) between 1 and 10 group by month(dt) order by month(dt);
-2100162604      1
-1969757069      2
-2081371530      3
-2156878512      4
-2476890621      5
-2526662896      6
-2489723244      7
-2480356358      8
-2522746544      9
-2614372352      10
-Time taken: 792.552 seconds, Fetched 10 row(s)
